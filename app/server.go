@@ -14,12 +14,15 @@ const (
 )
 const SEPARATOR = "\r\n"
 
+var memory = make(map[string]any)
+
 func main() {
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379", err.Error())
 		os.Exit(1)
 	}
+
 	fmt.Println("Redis server started" + listener.Addr().String())
 	defer listener.Close()
 	for {
@@ -33,7 +36,6 @@ func main() {
 
 func handleClientConnection(conn net.Conn) {
 	defer conn.Close()
-
 	for {
 		buf := make([]byte, 1024)
 		n, err := conn.Read(buf)
@@ -57,8 +59,29 @@ func handleClientConnection(conn net.Conn) {
 				conn.Write([]byte("+ \r\n"))
 				continue
 			}
-
 			conn.Write([]byte("+" + args[1].Data.(string) + "\r\n"))
+		case "set":
+			if argsLength < 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'set' command\r\n"))
+				continue
+			}
+			key := args[1].Data.(string)
+			value := args[2].Data.(string)
+			memory[key] = value
+			conn.Write([]byte("+OK\r\n"))
+		case "get":
+			if argsLength < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'get' command\r\n"))
+				continue
+			}
+			key := args[1].Data.(string)
+			value, ok := memory[key]
+			if !ok {
+				conn.Write([]byte("$-1\r\n"))
+				continue
+			}
+			conn.Write([]byte("+" + value.(string) + "\r\n"))
+
 		default:
 			conn.Write([]byte("-ERR unknown command '" + cmd + "'\r\n"))
 		}
