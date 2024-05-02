@@ -18,6 +18,10 @@ const (
 	SYNTAX_ERROR string = "syntax error"
 )
 
+type Config struct {
+	port int
+}
+
 type RespData struct {
 	Type rune
 	Data any
@@ -30,9 +34,12 @@ type MemoryData struct {
 var memory = make(map[string]MemoryData)
 
 func main() {
-	listener, err := net.Listen("tcp", "0.0.0.0:6379")
+	cfg := Config{port: 6379}
+	parseArgsToConfig(&cfg)
+	host := fmt.Sprint("0.0.0.0:", cfg.port)
+	listener, err := net.Listen("tcp", host)
 	if err != nil {
-		fmt.Println("Failed to bind to port 6379", err.Error())
+		fmt.Println("Failed to start server ", host, err.Error())
 		os.Exit(1)
 	}
 
@@ -177,6 +184,20 @@ func handleClientConnection(conn net.Conn) {
 			conn.Write([]byte("-ERR unknown command '" + cmd + "'\r\n"))
 		}
 
+	}
+}
+
+func parseArgsToConfig(cfg *Config) {
+	argsWithoutProg := os.Args[1:]
+	for i, arg := range argsWithoutProg {
+		if arg == "--port" && len(argsWithoutProg) > i {
+			port, err := strconv.Atoi(argsWithoutProg[i+1])
+			if err != nil {
+				fmt.Println("Invalid port number")
+				os.Exit(1)
+			}
+			cfg.port = port
+		}
 	}
 }
 
