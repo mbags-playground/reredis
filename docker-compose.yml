@@ -1,0 +1,13 @@
+version: "3.8" # Specify docker-compose version
+
+services:
+  redis:
+    image: redis:latest # Use the official Redis image (latest tag)
+    restart: always # Restart the container automatically if it stops
+    ports:
+      - "6379:6379" # Map container port 6379 to host port 6379
+    volumes:
+      - redis-data:/data # Optional: Persist data using a volume
+
+volumes:
+  redis-data: # Optional: Create a named volume for persistence

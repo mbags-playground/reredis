@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -13,8 +14,20 @@ const (
 	RESP_BULK_STRING rune = '$'
 )
 const SEPARATOR = "\r\n"
+const (
+	SYNTAX_ERROR string = "syntax error"
+)
 
-var memory = make(map[string]any)
+type RespData struct {
+	Type rune
+	Data any
+}
+type MemoryData struct {
+	expires time.Time
+	data    RespData
+}
+
+var memory = make(map[string]MemoryData)
 
 func main() {
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
@@ -23,7 +36,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Redis server started" + listener.Addr().String())
+	fmt.Println("Server started, waiting for tcp connection" + listener.Addr().String())
+	defer listener.Close()
+	startConnection(listener)
+}
+
+func startConnection(listener net.Listener) {
 	defer listener.Close()
 	for {
 		conn, err := listener.Accept()
@@ -67,20 +85,93 @@ func handleClientConnection(conn net.Conn) {
 			}
 			key := args[1].Data.(string)
 			value := args[2].Data.(string)
-			memory[key] = value
+			keepTTL := false
+
+			hasNx := false
+			hasXx := false
+			var expires time.Time
+
+			if argsLength == 3 {
+				memory[key] = MemoryData{expires: expires, data: RespData{Type: RESP_BULK_STRING, Data: value}}
+				fmt.Println(expires.IsZero())
+			}
+			if argsLength == 4 {
+				option := args[3].Data.(string)
+				switch option {
+
+				case "KEEPTTL":
+					keepTTL = true
+				case "NX":
+					hasNx = true
+				case "XX":
+					hasXx = true
+				default:
+					conn.Write(toError(SYNTAX_ERROR))
+				}
+			}
+			if argsLength == 5 || argsLength == 6 {
+				option := strings.ToUpper(args[3].Data.(string))
+				t, ok := args[4].Data.(string)
+				if !ok {
+					conn.Write(toError(SYNTAX_ERROR))
+				}
+				str, err := strconv.Atoi(t)
+				if err != nil {
+					conn.Write(toError(SYNTAX_ERROR))
+				}
+				if !ok {
+					conn.Write(toError("Invalid format"))
+				}
+				switch option {
+				case "EX":
+					expires = time.Now().Add(time.Duration(str) * time.Second)
+				case "PX":
+					expires = time.Now().Add(time.Duration(str) * time.Millisecond)
+				default:
+					conn.Write(toError(SYNTAX_ERROR))
+
+				}
+				if argsLength == 6 {
+					option = strings.ToUpper(args[5].Data.(string))
+					switch option {
+					case "NX":
+						hasNx = true
+					case "XX":
+						hasXx = true
+					default:
+						conn.Write(toError(SYNTAX_ERROR))
+					}
+				}
+
+			}
+
+			memory[key] = MemoryData{expires: expires, data: RespData{Type: RESP_BULK_STRING, Data: value}}
+			fmt.Println(keepTTL, hasNx, hasXx)
 			conn.Write([]byte("+OK\r\n"))
 		case "get":
+			var expires time.Time
 			if argsLength < 2 {
 				conn.Write([]byte("-ERR wrong number of arguments for 'get' command\r\n"))
 				continue
 			}
 			key := args[1].Data.(string)
-			value, ok := memory[key]
+			memoryValue, ok := memory[key]
+			if !ok || memoryValue.data.Data == nil {
+				conn.Write([]byte("$-1\r\n"))
+				continue
+			}
+			expires = memoryValue.expires
+			if !expires.IsZero() && time.Now().After(expires) {
+				delete(memory, key)
+				conn.Write([]byte("$-1\r\n"))
+				continue
+			}
+			value, ok := memoryValue.data.Data.(string)
 			if !ok {
 				conn.Write([]byte("$-1\r\n"))
 				continue
 			}
-			conn.Write([]byte("+" + value.(string) + "\r\n"))
+			conn.Write([]byte("+" + value + "\r\n"))
 
 		default:
 			conn.Write([]byte("-ERR unknown command '" + cmd + "'\r\n"))
@@ -93,6 +184,10 @@ func deserializeResp(str string) *RespData {
 	result := strings.Split(str, SEPARATOR)
 	resp := parseRsp(result)
 	return resp
+}
+
+func toError(message string) []byte {
+	return []byte("-ERR" + message + "\r\n")
 }
 
 func parseRsp(data []string) *RespData {
@@ -141,9 +236,4 @@ func parseBulkString(data []string) *RespData {
 
 func parseRespDataToString(resp *RespData) string {
 	return resp.Data.(string)
-}
-
-type RespData struct {
-	Type rune
-	Data any
 }
