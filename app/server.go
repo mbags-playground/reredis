@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -33,10 +35,37 @@ type MemoryData struct {
 
 var memory = make(map[string]MemoryData)
 
+var serverConfig Config = Config{port: 6379}
+
+var replicationInfo = map[string]string{
+	"role":                           "master",
+	"connected_slaves":               "0",
+	"master_replid":                  "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+	"master_repl_offset":             "0",
+	"second_repl_offset":             "-1",
+	"repl_backlog_active":            "0",
+	"repl_backlog_size":              "1048576",
+	"repl_backlog_first_byte_offset": "0",
+	"repl_backlog_histlen":           "",
+}
+
+func randomHex(n int) (string, error) {
+	bytes := make([]byte, n)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
 func main() {
-	cfg := Config{port: 6379}
-	parseArgsToConfig(&cfg)
-	host := fmt.Sprint("0.0.0.0:", cfg.port)
+	parseArgsToConfig(&serverConfig)
+	id, err := randomHex(40)
+	if err != nil {
+		fmt.Println("Could not generate the id")
+		os.Exit(1)
+	}
+	replicationInfo["master_replid"] = id
+	host := fmt.Sprint("0.0.0.0:", serverConfig.port)
 	listener, err := net.Listen("tcp", host)
 	if err != nil {
 		fmt.Println("Failed to start server ", host, err.Error())
@@ -179,6 +208,28 @@ func handleClientConnection(conn net.Conn) {
 				continue
 			}
 			conn.Write([]byte("+" + value + "\r\n"))
+		case "info":
+
+			if argsLength < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'info' command\r\n"))
+				continue
+			}
+
+			resource := args[1].Data.(string)
+			switch resource {
+			case "replication":
+				result := "# Replication" + SEPARATOR
+				length := len(result)
+				for key, value := range replicationInfo {
+
+					length = length + len(key) + len(value) + 1
+					result = result + key + ":" + value + "\r\n"
+				}
+				result = fmt.Sprint("$", length, SEPARATOR, result, SEPARATOR)
+				print(result)
+				conn.Write([]byte(result))
+				continue
+			}
 
 		default:
 			conn.Write([]byte("-ERR unknown command '" + cmd + "'\r\n"))
